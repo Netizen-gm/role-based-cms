@@ -538,3 +538,580 @@ exports.logout = async (req, res) => {
   }
 };
 ```
+
+
+### 10. controllers/roleController.js
+
+```javascript
+const Role = require('../models/Role');
+
+exports.getAllRoles = async (req, res) => {
+  try {
+    const roles = await Role.find();
+    res.json(roles);
+  } catch (error) {
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.createRole = async (req, res) => {
+  try {
+    const { name, permissions } = req.body;
+    
+    const existingRole = await Role.findOne({ name });
+    if (existingRole) {
+      return res.status(400).json({ message: 'Role already exists' });
+    }
+
+    const role = await Role.create({
+      name,
+      permissions,
+      isCustom: true
+    });
+
+    res.status(201).json({ message: 'Role created successfully', role });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.updateRole = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { permissions } = req.body;
+
+    const role = await Role.findByIdAndUpdate(
+      id,
+      { permissions },
+      { new: true }
+    );
+
+    if (!role) {
+      return res.status(404).json({ message: 'Role not found' });
+    }
+
+    res.json({ message: 'Role updated successfully', role });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.deleteRole = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const role = await Role.findById(id);
+
+    if (!role) {
+      return res.status(404).json({ message: 'Role not found' });
+    }
+
+    if (!role.isCustom) {
+      return res.status(400).json({ message: 'Cannot delete default roles' });
+    }
+
+    await Role.findByIdAndDelete(id);
+    res.json({ message: 'Role deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+```
+
+### 11. controllers/articleController.js
+
+```javascript
+const Article = require('../models/Article');
+
+exports.createArticle = async (req, res) => {
+  try {
+    const { title, body } = req.body;
+    
+    const article = await Article.create({
+      title,
+      body,
+      author: req.user._id,
+      image: req.file ? `/uploads/${req.file.filename}` : ''
+    });
+
+    const populatedArticle = await Article.findById(article._id).populate('author', 'fullName email');
+    res.status(201).json({ message: 'Article created successfully', article: populatedArticle });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.getAllArticles = async (req, res) => {
+  try {
+    let query = {};
+    
+    // Viewers can only see published articles
+    if (req.user.role.permissions.includes('view') && !req.user.role.permissions.includes('edit')) {
+      query.isPublished = true;
+    }
+
+    const articles = await Article.find(query)
+      .populate('author', 'fullName email')
+      .sort({ createdAt: -1 });
+    
+    res.json(articles);
+  } catch (error) {
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.getArticleById = async (req, res) => {
+  try {
+    const article = await Article.findById(req.params.id).populate('author', 'fullName email');
+    
+    if (!article) {
+      return res.status(404).json({ message: 'Article not found' });
+    }
+
+    res.json(article);
+  } catch (error) {
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.updateArticle = async (req, res) => {
+  try {
+    const { title, body } = req.body;
+    const article = await Article.findById(req.params.id);
+
+    if (!article) {
+      return res.status(404).json({ message: 'Article not found' });
+    }
+
+    article.title = title || article.title;
+    article.body = body || article.body;
+    if (req.file) {
+      article.image = `/uploads/${req.file.filename}`;
+    }
+
+    await article.save();
+    const updatedArticle = await Article.findById(article._id).populate('author', 'fullName email');
+    
+    res.json({ message: 'Article updated successfully', article: updatedArticle });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.deleteArticle = async (req, res) => {
+  try {
+    const article = await Article.findByIdAndDelete(req.params.id);
+    
+    if (!article) {
+      return res.status(404).json({ message: 'Article not found' });
+    }
+
+    res.json({ message: 'Article deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.publishArticle = async (req, res) => {
+  try {
+    const article = await Article.findById(req.params.id);
+    
+    if (!article) {
+      return res.status(404).json({ message: 'Article not found' });
+    }
+
+    article.isPublished = !article.isPublished;
+    await article.save();
+
+    res.json({ 
+      message: `Article ${article.isPublished ? 'published' : 'unpublished'} successfully`, 
+      article 
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+```
+
+### 12. routes/auth.js
+
+```javascript
+const express = require('express');
+const router = express.Router();
+const { body } = require('express-validator');
+const multer = require('multer');
+const upload = require('../utils/uploadConfig');
+const authController = require('../controllers/authController');
+
+router.post('/register', 
+  upload.single('profilePhoto'),
+  [
+    body('email').isEmail().withMessage('Please enter a valid email'),
+    body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
+    body('fullName').notEmpty().withMessage('Full name is required')
+  ],
+  authController.register
+);
+
+router.post('/login', authController.login);
+router.post('/refresh-token', authController.refreshToken);
+router.post('/logout', authController.logout);
+
+module.exports = router;
+```
+
+### 13. routes/roles.js
+
+```javascript
+const express = require('express');
+const router = express.Router();
+const roleController = require('../controllers/roleController');
+const auth = require('../middleware/auth');
+const checkPermission = require('../middleware/permissions');
+
+router.get('/', auth, roleController.getAllRoles);
+router.post('/', auth, checkPermission('manageRoles'), roleController.createRole);
+router.put('/:id', auth, checkPermission('manageRoles'), roleController.updateRole);
+router.delete('/:id', auth, checkPermission('manageRoles'), roleController.deleteRole);
+
+module.exports = router;
+```
+
+### 14. routes/articles.js
+
+```javascript
+const express = require('express');
+const router = express.Router();
+const articleController = require('../controllers/articleController');
+const auth = require('../middleware/auth');
+const checkPermission = require('../middleware/permissions');
+const upload = require('../utils/uploadConfig');
+
+router.get('/', auth, articleController.getAllArticles);
+router.get('/:id', auth, articleController.getArticleById);
+router.post('/', auth, checkPermission('create'), upload.single('image'), articleController.createArticle);
+router.put('/:id', auth, checkPermission('edit'), upload.single('image'), articleController.updateArticle);
+router.delete('/:id', auth, checkPermission('delete'), articleController.deleteArticle);
+router.patch('/:id/publish', auth, checkPermission('publish'), articleController.publishArticle);
+
+module.exports = router;
+```
+
+### 15. utils/uploadConfig.js
+
+```javascript
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+
+// Create uploads directory if it doesn't exist
+const uploadDir = 'uploads';
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir);
+}
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, 'uploads/');
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const fileFilter = (req, file, cb) => {
+  const allowedTypes = /jpeg|jpg|png|gif/;
+  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+  const mimetype = allowedTypes.test(file.mimetype);
+
+  if (mimetype && extname) {
+    return cb(null, true);
+  } else {
+    cb(new Error('Only images are allowed'));
+  }
+};
+
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: fileFilter
+});
+
+module.exports = upload;
+```
+
+---
+
+## Installation Instructions
+
+### Backend Setup
+
+1. Navigate to backend directory:
+```bash
+cd backend
+```
+
+2. Install dependencies:
+```bash
+npm install
+```
+
+3. Create `.env` file:
+```bash
+cp .env.example .env
+```
+
+4. Update `.env` with your MongoDB URI and JWT secrets:
+```env
+MONGO_URI=mongodb://localhost:27017/role-based-cms
+JWT_ACCESS_SECRET=your_super_secret_access_key_change_this
+JWT_REFRESH_SECRET=your_super_secret_refresh_key_change_this
+JWT_ACCESS_EXPIRATION=15m
+JWT_REFRESH_EXPIRATION=7d
+PORT=5000
+NODE_ENV=development
+CLIENT_URL=http://localhost:4200
+```
+
+5. Start MongoDB (if running locally):
+```bash
+mongod
+```
+
+6. Run the backend server:
+```bash
+npm run dev
+```
+
+The backend will run on `http://localhost:5000`
+
+### Frontend Setup (Angular)
+
+1. Install Angular CLI globally (if not installed):
+```bash
+npm install -g @angular/cli
+```
+
+2. Create new Angular project:
+```bash
+ng new frontend --routing --style=css
+cd frontend
+```
+
+3. Install dependencies:
+```bash
+npm install
+```
+
+4. Create environment file at `src/environments/environment.ts`:
+```typescript
+export const environment = {
+  production: false,
+  apiUrl: 'http://localhost:5000/api'
+};
+```
+
+5. Run the frontend:
+```bash
+ng serve
+```
+
+The frontend will run on `http://localhost:4200`
+
+---
+
+## API Endpoints
+
+### Authentication
+- `POST /api/auth/register` - Register new user
+- `POST /api/auth/login` - Login user
+- `POST /api/auth/refresh-token` - Refresh access token
+- `POST /api/auth/logout` - Logout user
+
+### Roles (Requires manageRoles permission)
+- `GET /api/roles` - Get all roles
+- `POST /api/roles` - Create new role
+- `PUT /api/roles/:id` - Update role permissions
+- `DELETE /api/roles/:id` - Delete custom role
+
+### Articles
+- `GET /api/articles` - Get all articles (filtered by role)
+- `GET /api/articles/:id` - Get single article
+- `POST /api/articles` - Create article (requires 'create' permission)
+- `PUT /api/articles/:id` - Update article (requires 'edit' permission)
+- `DELETE /api/articles/:id` - Delete article (requires 'delete' permission)
+- `PATCH /api/articles/:id/publish` - Publish/unpublish article (requires 'publish' permission)
+
+---
+
+## Test Users
+
+You can create these test users through the registration endpoint or manually in MongoDB:
+
+### SuperAdmin
+```json
+{
+  "fullName": "Super Admin",
+  "email": "superadmin@test.com",
+  "password": "password123",
+  "roleName": "SuperAdmin"
+}
+```
+**Permissions**: create, edit, delete, publish, view, manageRoles, manageUsers
+
+### Manager
+```json
+{
+  "fullName": "Manager User",
+  "email": "manager@test.com",
+  "password": "password123",
+  "roleName": "Manager"
+}
+```
+**Permissions**: create, edit, delete, publish, view
+
+### Contributor
+```json
+{
+  "fullName": "Contributor User",
+  "email": "contributor@test.com",
+  "password": "password123",
+  "roleName": "Contributor"
+}
+```
+**Permissions**: create, edit, view
+
+### Viewer
+```json
+{
+  "fullName": "Viewer User",
+  "email": "viewer@test.com",
+  "password": "password123",
+  "roleName": "Viewer"
+}
+```
+**Permissions**: view (published articles only)
+
+---
+
+## Frontend Implementation Summary
+
+Due to file size limitations in this document, here's a summary of the Angular frontend structure:
+
+### Key Services
+
+1. **AuthService** - Handles authentication, token management, and refresh logic
+2. **RoleService** - Manages roles and permissions
+3. **ArticleService** - CRUD operations for articles
+
+### Guards
+
+1. **AuthGuard** - Protects routes requiring authentication
+2. **PermissionGuard** - Checks user permissions before allowing route access
+
+### Interceptors
+
+1. **AuthInterceptor** - Adds JWT token to all HTTP requests
+
+### Components
+
+1. **LoginComponent** - User login form
+2. **RegisterComponent** - User registration form
+3. **DashboardComponent** - Main dashboard with role-based navigation
+4. **ArticleListComponent** - Display articles based on permissions
+5. **ArticleFormComponent** - Create/Edit articles (conditional rendering)
+6. **RoleManagementComponent** - Create and manage roles (SuperAdmin only)
+7. **AccessMatrixComponent** - Visual representation of role permissions
+
+### Conditional Rendering Example
+
+```typescript
+// In component
+hasPermission(permission: string): boolean {
+  return this.authService.currentUser?.role?.permissions?.includes(permission) || false;
+}
+```
+
+```html
+<!-- In template -->
+<button *ngIf="hasPermission('create')" (click)="createArticle()">Create Article</button>
+<button *ngIf="hasPermission('edit')" (click)="editArticle()">Edit</button>
+<button *ngIf="hasPermission('delete')" (click)="deleteArticle()">Delete</button>
+<button *ngIf="hasPermission('publish')" (click)="publishArticle()">Publish</button>
+```
+
+---
+
+## Additional Notes
+
+### Security Considerations
+1. Always use HTTPS in production
+2. Store JWT secrets securely (environment variables)
+3. Implement rate limiting for authentication endpoints
+4. Validate and sanitize all user inputs
+5. Use bcrypt for password hashing (already implemented)
+
+### Database Indexes
+Consider adding indexes for better performance:
+```javascript
+// In models
+userSchema.index({ email: 1 });
+articleSchema.index({ author: 1, isPublished: 1 });
+```
+
+### Future Enhancements
+1. Implement email verification
+2. Add password reset functionality
+3. Implement audit logging
+4. Add pagination for articles list
+5. Implement search and filtering
+6. Add user profile management
+7. Implement file storage with cloud services (AWS S3, Cloudinary)
+
+---
+
+## Testing
+
+### Backend Testing with Postman/Thunder Client
+
+1. Register a user
+2. Login and save the access token
+3. Add token to Authorization header: `Bearer <your_token>`
+4. Test all endpoints based on user permissions
+
+### Frontend Testing
+
+1. Test user registration and login
+2. Verify role-based navigation visibility
+3. Test article CRUD operations based on permissions
+4. Verify viewers can only see published articles
+5. Test access matrix display
+6. Test role creation (SuperAdmin only)
+
+---
+
+## Deployment
+
+### Backend Deployment (Heroku/Railway/Render)
+
+1. Add `Procfile`:
+```
+web: node backend/server.js
+```
+
+2. Set environment variables in deployment platform
+3. Use MongoDB Atlas for production database
+
+### Frontend Deployment (Vercel/Netlify)
+
+1. Build the Angular app:
+```bash
+ng build --configuration=production
+```
+
+2. Deploy the `dist/` folder
+3. Configure environment variables for production API URL
+
+---
+
+This implementation guide covers all the core requirements for the Dynamic Role-Based CMS assessment. Make sure to test thoroughly and add additional features as needed.
